@@ -1,0 +1,12 @@
+~$*.xlsx 
+~$*.xls 
+~$*.docx 
+~$*.doc 
+~$*.pptx 
+~$*.ppt 
+~$*.pdf 
+~$*.txt 
+~$*.rtf 
+
+~$*.env
+~$*.env.local
