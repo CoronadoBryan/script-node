@@ -8,5 +8,3 @@
 ~$*.txt 
 ~$*.rtf 
 
-~$*.env
-~$*.env.local
