@@ -115,8 +115,19 @@ const insertDataIntoUsers = () => {
     const payment_method = userInfo.payment_method || null;
     const account_wallet = userInfo.account_wallet || null;
 
-    // Obtener balance y balance_disponible de la columna "Inversión en USDT"
-    const balance = row["Capital + Upgrades"] ? parseFloat(row["Capital + Upgrades"]) : 0;
+    // Obtener balance basado en la lógica de la columna "ACUMULA"
+    let balance;
+    if (row["ACUMULA"] && row["ACUMULA"].toString().trim().toUpperCase() === "ACUMULA") {
+      balance = row["Total Afiliacion + Rendimientos"] ? parseFloat(row["Total Afiliacion + Rendimientos"]) : null;
+    } else {
+      balance = row["Capital + Upgrades"] ? parseFloat(row["Capital + Upgrades"]) : 0;
+    }
+
+    // Asegurarse de que balance no sea NaN
+    if (isNaN(balance)) {
+      balance = null;
+    }
+
     const balance_disponible = 0; // Asumimos que el balance disponible es igual al balance inicial
 
     // Obtener las fechas actuales para created_at y updated_at
@@ -231,6 +242,8 @@ const updateReferredBy = () => {
     }
   });
 };
+
+
 
 // Insertar datos en MySQL en la tabla licences
 const insertDataIntoLicences = () => {
