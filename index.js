@@ -9,7 +9,7 @@ const connection = mysql.createConnection({
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   port: process.env.DB_PORT,
-  connectTimeout: 20000 // Aumentar el tiempo de espera a 10 segundos
+  connectTimeout: 20000 
 });
 
 
@@ -26,13 +26,14 @@ connection.connect((err) => {
 
 
 // Leer archivo Excel principal excel 1 
-const workbook = xlsx.readFile("C:\\Users\\Ryzen 3\\Desktop\\script-node\\datata.xlsx");
+const workbook = xlsx.readFile("C:\\Users\\PC\\Desktop\\BRYAN - CORONADO\\SCRIPT-50PLAN\\script-node\\data.xlsx");
 const sheetName = "Afiliados"; // Especificar el nombre de la hoja directamente
 const sheet = workbook.Sheets[sheetName];
 const data = xlsx.utils.sheet_to_json(sheet);
 
 // Leer el segundo archivo Excel para obtener información adicional
-const workbookAdditionalData = xlsx.readFile("C:\\Users\\Ryzen 3\\Desktop\\script-node\\datata2.xlsx");
+const workbookAdditionalData = xlsx.readFile("C:\\Users\\PC\\Desktop\\BRYAN - CORONADO\\SCRIPT-50PLAN\\script-node\\datata2.csv");
+
 const sheetNameAdditionalData = workbookAdditionalData.SheetNames[0];
 const sheetAdditionalData = workbookAdditionalData.Sheets[sheetNameAdditionalData];
 const additionalUserData = xlsx.utils.sheet_to_json(sheetAdditionalData);
@@ -42,7 +43,10 @@ const userInfoMap = {};
 additionalUserData.forEach((row) => {
   const username = row["username"] ? row["username"].toString().trim() : null;
   if (username) {
-    userInfoMap[username] = {
+    // Guardar tanto en mayúsculas como en minúsculas
+    const usernameUpper = username.toUpperCase();
+    const usernameLower = username.toLowerCase();
+    const userData = {
       fname: row["fname"] ? row["fname"].toString().trim() : null,
       lname: row["lname"] ? row["lname"].toString().trim() : null,
       password: row["password"] ? row["password"].toString().trim() : null,
@@ -56,8 +60,20 @@ additionalUserData.forEach((row) => {
       phone: row["phone"] ? row["phone"].toString().trim() : null,
       country: row["address"] && row["address"] !== "NULL" ? JSON.parse(row["address"]).country : null
     };
+    
+    // Guardar la información para ambas versiones del username
+    userInfoMap[usernameUpper] = userData;
+    userInfoMap[usernameLower] = userData;
   }
 });
+
+// Cuando buscas la información, intenta ambas versiones
+const getUserInfo = (username) => {
+  if (!username) return {};
+  return userInfoMap[username.toUpperCase()] || 
+         userInfoMap[username.toLowerCase()] || 
+         {};
+};
 
 // Reiniciar el contador de IDs
 const resetAutoIncrement = (tableName) => {
@@ -73,27 +89,24 @@ const resetAutoIncrement = (tableName) => {
 
 // Insertar datos en MySQL en la tabla users
 const insertDataIntoUsers = () => {
-  resetAutoIncrement('users'); // Reiniciar AUTO_INCREMENT en users
+  resetAutoIncrement('users');
 
   let pendingQueries = data.filter(row => {
     let status = row["ESTADO"]
       ? row["ESTADO"].toString().trim().toUpperCase()
       : null;
     return status === "VALIDADO";
-  }).length; // Contador de consultas pendientes solo para "VALIDADO"
+  }).length;
 
   data.forEach((row) => {
-    // Definir status
     let status = row["ESTADO"]
       ? row["ESTADO"].toString().trim().toUpperCase()
       : null;
 
-    // Solo procesar si el estado es "VALIDADO"
     if (status !== "VALIDADO") {
-      return; // Omitir esta fila si no está validada
+      return;
     }
 
-    // Convertir status a número
     status = 1; // Asignar 1 para "VALIDADO"
 
     const username = row["COD. PLATAFORMA"]
@@ -101,7 +114,7 @@ const insertDataIntoUsers = () => {
       : null;
 
     // Obtener información del mapa
-    const userInfo = userInfoMap[username] || {};
+    const userInfo = getUserInfo(username);
     const email = userInfo.email || null;
     const phone = userInfo.phone || null;
     const country = userInfo.country || null;
@@ -115,27 +128,19 @@ const insertDataIntoUsers = () => {
     const payment_method = userInfo.payment_method || null;
     const account_wallet = userInfo.account_wallet || null;
 
-    // Obtener balance basado en la lógica de la columna "ACUMULA"
-    let balance;
-    if (row["ACUMULA"] && row["ACUMULA"].toString().trim().toUpperCase() === "ACUMULA") {
-      balance = row["Total Afiliacion + Rendimientos"] ? parseFloat(row["Total Afiliacion + Rendimientos"]) : null;
-    } else {
-      balance = row["Capital + Upgrades"] ? parseFloat(row["Capital + Upgrades"]) : 0;
+    // Obtener balance de la columna "TOTAL MAYORES Y MENORES A 1000"
+    let balance = null;
+    if (row["TOTAL MAYORES Y MENORES A 1000"]) {
+      const balanceValue = parseFloat(row["TOTAL MAYORES Y MENORES A 1000"]);
+      balance = !isNaN(balanceValue) ? balanceValue : null;
     }
 
-    // Asegurarse de que balance no sea NaN
-    if (isNaN(balance)) {
-      balance = null;
-    }
+    const balance_disponible = 0; // Siempre será 0
 
-    const balance_disponible = 0; // Asumimos que el balance disponible es igual al balance inicial
-
-    // Obtener las fechas actuales para created_at y updated_at
     const createdAt = new Date();
     const updatedAt = new Date();
 
-    // Imprimir valores antes de la inserción para depuración
-    console.log(`Insertando/actualizando usuario: ${username}, fname: ${fname}, lname: ${lname}, balance: ${balance}`);
+    console.log(`Insertando/actualizando usuario: ${username}, balance: ${balance}`);
 
     const insertQuery = `
       INSERT INTO users (username, email, phone, country, status, fname, lname, password, verification_code, ev, kyc, kyc_infos, payment_method, account_wallet, balance, balance_disponible, created_at, updated_at) 
@@ -183,36 +188,36 @@ const updateReferredBy = () => {
       ? row["ESTADO"].toString().trim().toUpperCase()
       : null;
     return status === "VALIDADO";
-  }).length; // Contador de actualizaciones pendientes solo para "VALIDADO"
+  }).length;
 
   data.forEach((row) => {
-    // Definir status
     let status = row["ESTADO"]
       ? row["ESTADO"].toString().trim().toUpperCase()
       : null;
 
-    // Solo procesar si el estado es "VALIDADO"
     if (status !== "VALIDADO") {
-      return; // Omitir esta fila si no está validada
+      return;
     }
 
     const username = row["COD. PLATAFORMA"]
       ? row["COD. PLATAFORMA"].toString().trim()
       : null;
 
-    const codigoReferido = row["CODIGO REFERIDO"]
-      ? row["CODIGO REFERIDO"].toString().trim()
+    const codigoReferido = row["CODIGO REFERIDO2"]
+      ? row["CODIGO REFERIDO2"].toString().trim()
       : null;
 
     if (codigoReferido) {
-      const query = `SELECT id FROM users WHERE username = ?`;
-      connection.query(query, [codigoReferido], (err, results) => {
+      // Buscar tanto en mayúsculas como en minúsculas
+      const query = `SELECT id FROM users WHERE username = ? OR username = ?`;
+      connection.query(query, [codigoReferido.toUpperCase(), codigoReferido.toLowerCase()], (err, results) => {
         if (err) {
           console.error("Error buscando usuario referido:", err);
-          process.exit(1); // Detener el script si ocurre un error
+          process.exit(1);
         } else if (results.length > 0) {
           completeUpdate(results[0].id);
         } else {
+          console.log(`No se encontró referido para: ${codigoReferido}`);
           completeUpdate(null);
         }
       });
@@ -247,87 +252,89 @@ const updateReferredBy = () => {
 
 // Insertar datos en MySQL en la tabla licences
 const insertDataIntoLicences = () => {
-  resetAutoIncrement('licences'); // Reiniciar AUTO_INCREMENT en licences
+  resetAutoIncrement('licences');
 
   let pendingQueries = data.filter(row => {
     let status = row["ESTADO"]
       ? row["ESTADO"].toString().trim().toUpperCase()
       : null;
     return status === "VALIDADO";
-  }).length; // Contador de consultas pendientes solo para "VALIDADO"
+  }).length;
 
   data.forEach((row) => {
-    // Definir status
     let status = row["ESTADO"]
       ? row["ESTADO"].toString().trim().toUpperCase()
       : null;
 
-    // Solo procesar si el estado es "VALIDADO"
     if (status !== "VALIDADO") {
-      return; // Omitir esta fila si no está validada
+      return;
     }
 
     const username = row["COD. PLATAFORMA"]
       ? row["COD. PLATAFORMA"].toString().trim()
       : null;
 
-    // Obtener el ID del usuario desde la tabla users
+    // Obtener el balance para usarlo como invested_amount
+    let invested_amount = null;
+    if (row["TOTAL MAYORES Y MENORES A 1000"]) {
+      const balanceValue = parseFloat(row["TOTAL MAYORES Y MENORES A 1000"]);
+      invested_amount = !isNaN(balanceValue) ? balanceValue : null;
+    }
+
+    // Determinar el plan_id basado en el invested_amount
+    let planId = null;
+    if (invested_amount !== null) {
+      if (invested_amount >= 100 && invested_amount <= 1999) {
+        planId = 1;  // ALFA
+      } else if (invested_amount >= 2000 && invested_amount <= 3999) {
+        planId = 2;  // BETA
+      } else if (invested_amount >= 4000 && invested_amount <= 5999) {
+        planId = 3;  // GAMMA
+      } else if (invested_amount >= 6000) {
+        planId = 4;  // DELTA
+      }
+    }
+
     const userQuery = `SELECT id FROM users WHERE username = ?`;
     connection.query(userQuery, [username], (err, results) => {
       if (err) {
         console.error("Error buscando usuario:", err);
-        process.exit(1); // Detener el script si ocurre un error
+        process.exit(1);
       } else if (results.length > 0) {
         const userId = results[0].id;
 
-        // Determinar el plan_id basado en la columna "Licencia"
-        let planId = null;
-        const licencia = row["Licencia"] ? row["Licencia"].toString().trim().toUpperCase() : null;
-        switch (licencia) {
-          case "ALFA":
-            planId = 1;
-            break;
-          case "BETA":
-            planId = 2;
-            break;
-          case "GAMMA":
-            planId = 3;
-            break;
-          case "DELTA":
-            planId = 4;
-            break;
-          default:
-            planId = null;
-        }
-
-        // Obtener el valor de "Capital + Upgrades" para invested_amount
-        const investedAmount = row["Capital + Upgrades"] ? parseFloat(row["Capital + Upgrades"]) : 0;
-
-        // Insertar en la tabla licences
         const insertQuery = `
-          INSERT INTO licences (user_id, plan_id, status, invested_amount) 
-          VALUES (?, ?, ?, ?)
+          INSERT INTO licences (
+            user_id, 
+            plan_id, 
+            status, 
+            invested_amount,
+            interest_pay,
+            comission_pay,
+            created_at,
+            updated_at
+          ) 
+          VALUES (?, ?, ?, ?, 1, 1, NOW(), NOW())
         `;
-        const values = [userId, planId, 1, investedAmount]; // status es 1
+        const values = [userId, planId, 1, invested_amount];
 
         connection.query(insertQuery, values, (err, results) => {
           if (err) {
             console.error("Error insertando en licences:", err);
-            process.exit(1); // Detener el script si ocurre un error
+            process.exit(1);
           } else {
-            console.log("Dato insertado correctamente en licences:", results.insertId);
+            console.log(`Licencia insertada para ${username} - Amount: ${invested_amount} - Plan: ${planId}`);
           }
-          // Decrementar el contador de consultas pendientes
           pendingQueries--;
           if (pendingQueries === 0) {
-            connection.end(); // Cerrar conexión cuando todas las inserciones hayan terminado
+            connection.end();
           }
         });
       } else {
         console.log(`Usuario no encontrado para username: ${username}`);
         pendingQueries--;
         if (pendingQueries === 0) {
-          connection.end(); // Cerrar conexión cuando todas las inserciones hayan terminado
+          connection.end();
         }
       }
     });
