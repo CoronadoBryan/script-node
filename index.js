@@ -26,13 +26,13 @@ connection.connect((err) => {
 
 
 // Leer archivo Excel principal excel 1 
-const workbook = xlsx.readFile("C:\\Users\\PC\\Desktop\\BRYAN - CORONADO\\SCRIPT-50PLAN\\script-node\\data.xlsx");
+const workbook = xlsx.readFile("C:\\Users\\PC\\Desktop\\BRYAN - CORONADO\\SCRIPT-50PLAN\\script-node\\data2.xlsx");
 const sheetName = "Afiliados"; // Especificar el nombre de la hoja directamente
 const sheet = workbook.Sheets[sheetName];
 const data = xlsx.utils.sheet_to_json(sheet);
 
 // Leer el segundo archivo Excel para obtener información adicional
-const workbookAdditionalData = xlsx.readFile("C:\\Users\\PC\\Desktop\\BRYAN - CORONADO\\SCRIPT-50PLAN\\script-node\\datata2.csv");
+const workbookAdditionalData = xlsx.readFile("C:\\Users\\PC\\Desktop\\BRYAN - CORONADO\\SCRIPT-50PLAN\\script-node\\datata3.csv");
 
 const sheetNameAdditionalData = workbookAdditionalData.SheetNames[0];
 const sheetAdditionalData = workbookAdditionalData.Sheets[sheetNameAdditionalData];
@@ -116,26 +116,29 @@ const insertDataIntoUsers = () => {
     // Obtener información del mapa
     const userInfo = getUserInfo(username);
     const email = userInfo.email || null;
-    const phone = userInfo.phone || null;
+    const phone = row["TELEFONO"] ? row["TELEFONO"].toString().trim() : null;
     const country = userInfo.country || null;
     const fname = userInfo.fname || null;
     const lname = userInfo.lname || null;
     const password = userInfo.password || null;
     const verification_code = userInfo.verification_code || null;
-    const ev = userInfo.ev;
-    const kyc = userInfo.kyc;
+    
+    // Siempre establecer ev y kyc en 1 para usuarios VALIDADOS
+    const ev = 1;
+    const kyc = 1;
+    
     const kyc_infos = userInfo.kyc_infos || null;
     const payment_method = userInfo.payment_method || null;
     const account_wallet = userInfo.account_wallet || null;
 
-    // Obtener balance de la columna "TOTAL MAYORES Y MENORES A 1000"
+    // Obtener balance
     let balance = null;
     if (row["TOTAL MAYORES Y MENORES A 1000"]) {
       const balanceValue = parseFloat(row["TOTAL MAYORES Y MENORES A 1000"]);
       balance = !isNaN(balanceValue) ? balanceValue : null;
     }
 
-    const balance_disponible = 0; // Siempre será 0
+    const balance_disponible = 0;
 
     const createdAt = new Date();
     const updatedAt = new Date();
@@ -248,8 +251,6 @@ const updateReferredBy = () => {
   });
 };
 
-
-
 // Insertar datos en MySQL en la tabla licences
 const insertDataIntoLicences = () => {
   resetAutoIncrement('licences');
@@ -327,18 +328,113 @@ const insertDataIntoLicences = () => {
           }
           pendingQueries--;
           if (pendingQueries === 0) {
-            connection.end();
+            updateUserRoles(); // En lugar de connection.end()
           }
         });
       } else {
         console.log(`Usuario no encontrado para username: ${username}`);
         pendingQueries--;
         if (pendingQueries === 0) {
-          connection.end();
+          updateUserRoles(); // En lugar de connection.end()
         }
       }
     });
   });
+};
+
+// Actualizar roles de los usuarios
+const updateUserRoles = () => {
+  // Primero obtenemos todos los usuarios VALIDADOS
+  const query = `
+    SELECT 
+      u.id,
+      u.username,
+      u.balance,
+      (
+        SELECT COUNT(*) 
+        FROM users ref 
+        WHERE ref.reffered_by = u.id 
+        AND ref.status = 1
+      ) as referral_count,
+      (
+        SELECT COALESCE(SUM(balance), 0)
+        FROM users ref
+        WHERE ref.reffered_by = u.id
+        AND ref.status = 1
+      ) as referrals_volume
+    FROM users u
+    WHERE u.status = 1
+  `;
+
+  connection.query(query, (err, users) => {
+    if (err) {
+      console.error("Error obteniendo datos de usuarios:", err);
+      process.exit(1);
+    }
+
+    let pendingUpdates = users.length;
+
+    users.forEach(user => {
+      let newRoleId;
+      const referralCount = user.referral_count;
+      const balance = user.balance;
+      const referralsVolume = user.referrals_volume;
+
+      // Determinar el rol basado en las condiciones
+      if (referralCount >= 6) {
+        // Potencial Líder Gamma o Delta
+        if (balance >= 6000 && referralsVolume >= 24000) {
+          newRoleId = 4; // Líder Delta
+        } else if (balance >= 4000 && referralsVolume >= 24000) {
+          newRoleId = 3; // Líder Gamma
+        } else if (balance >= 100) {
+          newRoleId = 2; // Promotor (si no califica para líder)
+        } else {
+          newRoleId = 1; // Inversor (si no tiene balance suficiente)
+        }
+      } else if (referralCount >= 1 && referralCount <= 5 && balance >= 100) {
+        newRoleId = 2; // Promotor
+      } else if (referralCount === 0 && balance >= 100) {
+        newRoleId = 1; // Inversor
+      } else {
+        newRoleId = 1; // Por defecto Inversor
+      }
+
+      // Actualizar el rol y total_referrals del usuario
+      const updateQuery = `
+        UPDATE users 
+        SET user_role_id = ?,
+            total_referrals = ?
+        WHERE id = ?
+      `;
+
+      connection.query(updateQuery, [newRoleId, referralCount, user.id], (updateErr, result) => {
+        if (updateErr) {
+          console.error(`Error actualizando rol para usuario ${user.username}:`, updateErr);
+          process.exit(1);
+        }
+
+        console.log(`Usuario ${user.username}: Rol=${newRoleId} (${getRoleName(newRoleId)}) - Total Referidos=${referralCount} - Balance=${balance} - Volumen=${referralsVolume}`);
+
+        pendingUpdates--;
+        if (pendingUpdates === 0) {
+          console.log("Actualización de roles y total de referidos completada");
+          connection.end();
+        }
+      });
+    });
+  });
+};
+
+// Función auxiliar para obtener el nombre del rol
+const getRoleName = (roleId) => {
+  switch (roleId) {
+    case 1: return "Inversor";
+    case 2: return "Promotor";
+    case 3: return "Líder Gamma";
+    case 4: return "Líder Delta";
+    default: return "Desconocido";
+  }
 };
 
 // Iniciar el proceso
