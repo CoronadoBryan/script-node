@@ -26,13 +26,13 @@ connection.connect((err) => {
 
 
 // Leer archivo Excel principal excel 1 
-const workbook = xlsx.readFile("C:\\Users\\PC\\Desktop\\BRYAN - CORONADO\\SCRIPT-50PLAN\\script-node\\data.xlsx");
+const workbook = xlsx.readFile("C:\\Users\\PC\\Desktop\\BRYAN - CORONADO\\SCRIPT-50PLAN\\script-node\\data2.xlsx");
 const sheetName = "Afiliados"; // Especificar el nombre de la hoja directamente
 const sheet = workbook.Sheets[sheetName];
 const data = xlsx.utils.sheet_to_json(sheet);
 
 // Leer el segundo archivo Excel para obtener información adicional
-const workbookAdditionalData = xlsx.readFile("C:\\Users\\PC\\Desktop\\BRYAN - CORONADO\\SCRIPT-50PLAN\\script-node\\datata.csv");
+const workbookAdditionalData = xlsx.readFile("C:\\Users\\PC\\Desktop\\BRYAN - CORONADO\\SCRIPT-50PLAN\\script-node\\datata3.csv");
 
 const sheetNameAdditionalData = workbookAdditionalData.SheetNames[0];
 const sheetAdditionalData = workbookAdditionalData.Sheets[sheetNameAdditionalData];
