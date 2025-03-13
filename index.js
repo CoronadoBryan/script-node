@@ -419,7 +419,7 @@ const updateUserRoles = () => {
         pendingUpdates--;
         if (pendingUpdates === 0) {
           console.log("Actualización de roles y total de referidos completada");
-          connection.end();
+          insertTransactions(); // Llamar a la función para insertar transacciones
         }
       });
     });
@@ -435,6 +435,78 @@ const getRoleName = (roleId) => {
     case 4: return "Líder Delta";
     default: return "Desconocido";
   }
+};
+
+// Insertar transacciones en la tabla transactions
+const insertTransactions = () => {
+  let pendingTransactions = data.filter(row => {
+    let status = row["ESTADO"]
+      ? row["ESTADO"].toString().trim().toUpperCase()
+      : null;
+    return status === "VALIDADO";
+  }).length;
+
+  data.forEach((row) => {
+    let status = row["ESTADO"]
+      ? row["ESTADO"].toString().trim().toUpperCase()
+      : null;
+
+    if (status !== "VALIDADO") {
+      return;
+    }
+
+    const username = row["COD. PLATAFORMA"]
+      ? row["COD. PLATAFORMA"].toString().trim()
+      : null;
+
+    const userQuery = `SELECT id FROM users WHERE username = ?`;
+    connection.query(userQuery, [username], (err, results) => {
+      if (err) {
+        console.error("Error buscando usuario:", err);
+        process.exit(1);
+      } else if (results.length > 0) {
+        const userId = results[0].id;
+
+        for (let i = 1; i <= 10; i++) {
+          const movimientoKey = `MOVIMIENTO ${i} USDT`;
+
+          const movimiento = row[movimientoKey] ? parseFloat(row[movimientoKey]) : null;
+
+          if (movimiento !== null) {
+            const codRel = movimiento < 0 ? "RETIRO" : "UPGRADE";
+            const details = `${movimiento} USDT - ${codRel}`;
+
+            const insertQuery = `
+              INSERT INTO transactions (user_id, username, details, cod_rel, created_at, updated_at)
+              VALUES (?, ?, ?, ?, NOW(), NOW())
+            `;
+            const values = [userId, username, details, codRel];
+
+            connection.query(insertQuery, values, (err, results) => {
+              if (err) {
+                console.error("Error insertando transacción:", err);
+                process.exit(1);
+              } else {
+                console.log(`Transacción insertada para ${username} - Monto: ${movimiento} - Tipo: ${codRel}`);
+              }
+              pendingTransactions--;
+              if (pendingTransactions === 0) {
+                console.log("Todas las transacciones han sido insertadas.");
+                // Aquí puedes llamar a otra función si es necesario
+              }
+            });
+          }
+        }
+      } else {
+        console.log(`Usuario no encontrado para username: ${username}`);
+        pendingTransactions--;
+        if (pendingTransactions === 0) {
+          console.log("Todas las transacciones han sido insertadas.");
+          // Aquí puedes llamar a otra función si es necesario
+        }
+      }
+    });
+  });
 };
 
 // Iniciar el proceso
