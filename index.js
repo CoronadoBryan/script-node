@@ -342,6 +342,25 @@ const insertDataIntoLicences = () => {
   });
 };
 
+// Función para validar fechas
+const isValidDate = (date) => {
+  return date instanceof Date && !isNaN(date);
+};
+
+// Función para validar y formatear fechas
+const formatDate = (date) => {
+  if (date instanceof Date && !isNaN(date)) {
+    return date.toISOString().slice(0, 19).replace('T', ' ');
+  }
+  return null;
+};
+
+// Función para convertir un número de serie de Excel a una fecha
+const excelDateToJSDate = (serial) => {
+  const date = new Date((serial - 25569) * 86400 * 1000);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(), date.getMinutes(), date.getSeconds());
+};
+
 // Actualizar roles de los usuarios
 const updateUserRoles = () => {
   // Primero obtenemos todos los usuarios VALIDADOS
@@ -446,6 +465,111 @@ const insertTransactions = () => {
     return status === "VALIDADO";
   }).length;
 
+  // Ordenar los datos por la fecha más antigua a la más nueva
+  data.sort((a, b) => {
+    const fechaA = new Date(a["Fecha Upgrade1"]);
+    const fechaB = new Date(b["Fecha Upgrade1"]);
+    return fechaA - fechaB;
+  });
+
+  // Reiniciar el AUTO_INCREMENT de la tabla transactions
+  const resetAutoIncrementTransactions = () => {
+    const query = `ALTER TABLE transactions AUTO_INCREMENT = 1`;
+    connection.query(query, (err, results) => {
+      if (err) {
+        console.error("Error reiniciando AUTO_INCREMENT en transactions:", err);
+      } else {
+        console.log("AUTO_INCREMENT reiniciado correctamente en transactions");
+      }
+    });
+  };
+
+  resetAutoIncrementTransactions();
+
+  data.forEach((row, index) => {
+    let status = row["ESTADO"]
+      ? row["ESTADO"].toString().trim().toUpperCase()
+      : null;
+
+    if (status !== "VALIDADO") {
+      return;
+    }
+
+    const username = row["COD. PLATAFORMA"]
+      ? row["COD. PLATAFORMA"].toString().trim()
+      : null;
+
+    console.log(`Procesando usuario ${index + 1}/${data.length}: ${username}`);
+
+    const userQuery = `SELECT id FROM users WHERE username = ?`;
+    connection.query(userQuery, [username], (err, results) => {
+      if (err) {
+        console.error("Error buscando usuario:", err);
+        process.exit(1);
+      } else if (results.length > 0) {
+        const userId = results[0].id;
+
+        for (let i = 1; i <= 10; i++) {
+          const movimientoKey = `MOVIMIENTO ${i} USDT`;
+          const fechaUpgradeKey = `Fecha Upgrade${i}`;
+
+          const movimiento = row[movimientoKey] ? parseFloat(row[movimientoKey]) : null;
+          const fechaUpgrade = row[fechaUpgradeKey] ? parseFloat(row[fechaUpgradeKey]) : null;
+
+          if (movimiento !== null && fechaUpgrade !== null) {
+            const codRel = movimiento < 0 ? "RETIRO" : "ACTUALIZO";
+            const details = movimiento < 0 ? `retiro (${movimiento})` : `actualizo (${movimiento})`;
+
+            const validFechaUpgrade = excelDateToJSDate(fechaUpgrade).toISOString().slice(0, 19).replace('T', ' ');
+
+            const insertQuery = `
+              INSERT INTO transactions (user_id, username, details, cod_rel, category, admin_id, status, created_at, updated_at)
+              VALUES (?, ?, ?, ?, 11, NULL, NULL, ?, NOW())
+            `;
+            const values = [userId, username, details, codRel, validFechaUpgrade];
+
+            connection.query(insertQuery, values, (err, results) => {
+              if (err) {
+                console.error("Error insertando transacción:", err);
+                process.exit(1);
+              } else {
+                console.log(`Transacción insertada para ${username} - Monto: ${movimiento} - Tipo: ${codRel}`);
+              }
+              pendingTransactions--;
+              if (pendingTransactions === 0) {
+                console.log("Todas las transacciones han sido insertadas.");
+                connection.end(); // Cerrar la conexión después de completar
+              }
+            });
+          }
+        }
+      } else {
+        console.log(`Usuario no encontrado para username: ${username}`);
+        pendingTransactions--;
+        if (pendingTransactions === 0) {
+          console.log("Todas las transacciones han sido insertadas.");
+          connection.end(); // Cerrar la conexión después de completar
+        }
+      }
+    });
+  });
+
+  // Llamar a la función para insertar transacciones de afiliación
+  insertAffiliationTransactions();
+
+  // Llamar a la función para encontrar usuarios sin afiliación
+  findUsersWithoutAffiliation();
+};
+
+// Insertar transacciones de afiliación en la tabla transactions
+const insertAffiliationTransactions = () => {
+  let pendingAffiliations = data.filter(row => {
+    let status = row["ESTADO"]
+      ? row["ESTADO"].toString().trim().toUpperCase()
+      : null;
+    return status === "VALIDADO";
+  }).length;
+
   data.forEach((row) => {
     let status = row["ESTADO"]
       ? row["ESTADO"].toString().trim().toUpperCase()
@@ -467,45 +591,60 @@ const insertTransactions = () => {
       } else if (results.length > 0) {
         const userId = results[0].id;
 
-        for (let i = 1; i <= 10; i++) {
-          const movimientoKey = `MOVIMIENTO ${i} USDT`;
+        const inversionUSDT = row["Inversión en USDT"] !== undefined ? parseFloat(row["Inversión en USDT"]) : null;
+        const fechaEfectivaAfiliacion = row["Fecha Efectiva Afiliacion"] ? parseFloat(row["Fecha Efectiva Afiliacion"]) : null;
 
-          const movimiento = row[movimientoKey] ? parseFloat(row[movimientoKey]) : null;
+        // Manejar casos donde los valores son null
+        const details = inversionUSDT !== null ? `Se afilio con (${inversionUSDT})` : 'Se afilio con (null)';
+        const validFechaAfiliacion = fechaEfectivaAfiliacion !== null ? excelDateToJSDate(fechaEfectivaAfiliacion).toISOString().slice(0, 19).replace('T', ' ') : null;
 
-          if (movimiento !== null) {
-            const codRel = movimiento < 0 ? "RETIRO" : "UPGRADE";
-            const details = `${movimiento} USDT - ${codRel}`;
+        const insertQuery = `
+          INSERT INTO transactions (user_id, username, details, cod_rel, category, admin_id, status, created_at, updated_at)
+          VALUES (?, ?, ?, 'AFILIACION', 11, NULL, NULL, ?, NOW())
+        `;
+        const values = [userId, username, details, validFechaAfiliacion];
 
-            const insertQuery = `
-              INSERT INTO transactions (user_id, username, details, cod_rel, created_at, updated_at)
-              VALUES (?, ?, ?, ?, NOW(), NOW())
-            `;
-            const values = [userId, username, details, codRel];
-
-            connection.query(insertQuery, values, (err, results) => {
-              if (err) {
-                console.error("Error insertando transacción:", err);
-                process.exit(1);
-              } else {
-                console.log(`Transacción insertada para ${username} - Monto: ${movimiento} - Tipo: ${codRel}`);
-              }
-              pendingTransactions--;
-              if (pendingTransactions === 0) {
-                console.log("Todas las transacciones han sido insertadas.");
-                // Aquí puedes llamar a otra función si es necesario
-              }
-            });
+        connection.query(insertQuery, values, (err, results) => {
+          if (err) {
+            console.error("Error insertando transacción de afiliación:", err);
+            process.exit(1);
+          } else {
+            console.log(`Transacción de afiliación insertada para ${username} - Monto: ${inversionUSDT}`);
           }
-        }
+          pendingAffiliations--;
+          if (pendingAffiliations === 0) {
+            console.log("Todas las transacciones de afiliación han sido insertadas.");
+            // Aquí puedes llamar a otra función si es necesario
+          }
+        });
       } else {
         console.log(`Usuario no encontrado para username: ${username}`);
-        pendingTransactions--;
-        if (pendingTransactions === 0) {
-          console.log("Todas las transacciones han sido insertadas.");
+        pendingAffiliations--;
+        if (pendingAffiliations === 0) {
+          console.log("Todas las transacciones de afiliación han sido insertadas.");
           // Aquí puedes llamar a otra función si es necesario
         }
       }
     });
+  });
+};
+
+// Consulta para identificar usuarios sin afiliación
+const findUsersWithoutAffiliation = () => {
+  const query = `
+    SELECT u.username
+    FROM users u
+    LEFT JOIN transactions t ON u.id = t.user_id AND t.cod_rel = 'AFILIACION'
+    WHERE t.id IS NULL
+  `;
+
+  connection.query(query, (err, results) => {
+    if (err) {
+      console.error("Error buscando usuarios sin afiliación:", err);
+    } else {
+      console.log("Usuarios sin afiliación:", results);
+    }
+    connection.end(); // Cerrar la conexión después de completar
   });
 };
 
