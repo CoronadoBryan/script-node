@@ -12,18 +12,14 @@ const connection = mysql.createConnection({
   connectTimeout: 20000 
 });
 
-
-
 connection.connect((err) => {
   if (err) {
     console.error("Error conectando a la base de datos:", err);
-    return;
+    process.exit(1); // Terminar el script
   }
   console.log("Conectado a la base de datos");
+  insertDataIntoUsers(); // Iniciar el proceso después de conectar
 });
-
-
-
 
 // Leer archivo Excel principal excel 1 
 const workbook = xlsx.readFile("C:\\Users\\PC\\Desktop\\BRYAN - CORONADO\\SCRIPT-50PLAN\\script-node\\data.xlsx");
@@ -75,9 +71,9 @@ const getUserInfo = (username) => {
          {};
 };
 
-// Reiniciar el contador de IDs
+// Reiniciar el contador de AUTO_INCREMENT
 const resetAutoIncrement = (tableName) => {
-  const query = `ALTER TABLE ${tableName} AUTO_INCREMENT = 0`;
+  const query = `ALTER TABLE ${tableName} AUTO_INCREMENT = 1`;
   connection.query(query, (err, results) => {
     if (err) {
       console.error(`Error reiniciando AUTO_INCREMENT en ${tableName}:`, err);
@@ -171,13 +167,14 @@ const insertDataIntoUsers = () => {
     connection.query(insertQuery, values, (err, results) => {
       if (err) {
         console.error("Error insertando o actualizando datos:", err);
-        process.exit(1); // Detener el script si ocurre un error
+        return; // Continuar con el siguiente usuario en caso de error
       } else {
-        console.log("Dato insertado o actualizado correctamente:", results.insertId);
+        console.log("Dato insertado o actualizado correctamente");
       }
-      // Decrementar el contador de consultas pendientes
       pendingQueries--;
+      console.log(`Quedan ${pendingQueries} consultas pendientes.`); // Mensaje de depuración
       if (pendingQueries === 0) {
+        console.log("Todas las consultas de usuarios han sido procesadas.");
         updateReferredBy(); // Llamar a la función para actualizar reffered_by
       }
     });
@@ -211,40 +208,39 @@ const updateReferredBy = () => {
       : null;
 
     if (codigoReferido) {
-      // Buscar tanto en mayúsculas como en minúsculas
       const query = `SELECT id FROM users WHERE username = ? OR username = ?`;
       connection.query(query, [codigoReferido.toUpperCase(), codigoReferido.toLowerCase()], (err, results) => {
         if (err) {
           console.error("Error buscando usuario referido:", err);
-          process.exit(1);
+          return;
         } else if (results.length > 0) {
-          completeUpdate(results[0].id);
+          completeUpdate(results[0].id, username);
         } else {
           console.log(`No se encontró referido para: ${codigoReferido}`);
-          completeUpdate(null);
+          completeUpdate(null, username);
         }
       });
     } else {
-      completeUpdate(null);
+      completeUpdate(null, username);
     }
 
-    function completeUpdate(refferedBy) {
+    function completeUpdate(referredBy, username) {
       const updateQuery = `
         UPDATE users SET reffered_by = ? WHERE username = ?
       `;
-      const values = [refferedBy, username];
+      const values = [referredBy, username];
 
       connection.query(updateQuery, values, (err, results) => {
         if (err) {
           console.error("Error actualizando reffered_by:", err);
-          process.exit(1); // Detener el script si ocurre un error
+          return; // Continuar con el siguiente usuario en caso de error
         } else {
           console.log("reffered_by actualizado correctamente para:", username);
         }
-        // Decrementar el contador de actualizaciones pendientes
         pendingUpdates--;
         if (pendingUpdates === 0) {
-          insertDataIntoLicences(); // Llamar a la función para insertar en licences después de actualizar reffered_by
+          console.log("Actualización de reffered_by completada.");
+          insertCurrentYields(); // Llamar a la función para insertar en current_yields después de actualizar reffered_by
         }
       });
     }
@@ -648,5 +644,93 @@ const findUsersWithoutAffiliation = () => {
   });
 };
 
-// Iniciar el proceso
-insertDataIntoUsers();
+// Insertar pagos en la tabla current_yields
+const insertCurrentYields = () => {
+  console.log("Iniciando inserción de yields...");
+
+  // Reiniciar el AUTO_INCREMENT antes de insertar
+  resetAutoIncrement('current_yields');
+
+  const validData = data.filter(row => {
+    let status = row["ESTADO"]
+      ? row["ESTADO"].toString().trim().toUpperCase()
+      : null;
+    return status === "VALIDADO";
+  });
+
+  let pendingInserts = 0;
+
+  validData.forEach((row) => {
+    const username = row["COD. PLATAFORMA"]
+      ? row["COD. PLATAFORMA"].toString().trim()
+      : null;
+
+    if (!username) {
+      console.error("Error: Username no válido o no encontrado.");
+      process.exit(1); // Terminar el script
+    }
+
+    console.log(`Procesando usuario: ${username}`);
+
+    const userQuery = `SELECT id FROM users WHERE username = ?`;
+    connection.query(userQuery, [username], (err, results) => {
+      if (err) {
+        console.error("Error buscando usuario:", err);
+        process.exit(1); // Terminar el script
+      } else if (results.length === 0) {
+        console.error(`Usuario no encontrado para username: ${username}`);
+        process.exit(1); // Terminar el script
+      }
+
+      const userId = results[0].id;
+
+      // Procesar pagos semanales y mensuales
+      Object.keys(row).forEach((key) => {
+        if (key.startsWith("Pagos Semanales") || key.startsWith("Pago Mensual")) {
+          let amountString = row[key];
+
+          // Asegúrate de que amountString sea una cadena
+          if (typeof amountString !== 'string') {
+            amountString = String(amountString);
+          }
+
+          const amount = parseFloat(amountString.replace(/[^0-9.-]+/g, '').replace(',', '.'));
+
+          // Solo procesar si el monto es mayor que cero
+          if (!isNaN(amount) && amount > 0) {
+            console.log(`Insertando ${key} para ${username} - Monto: ${amount}`);
+            pendingInserts++;
+
+            // Lógica de inserción en la base de datos
+            const insertQuery = `
+              INSERT INTO current_yields (user_id, username, details, amount, created_at)
+              VALUES (?, ?, ?, ?, NOW())
+            `;
+            connection.query(insertQuery, [userId, username, key, amount], (err, result) => {
+              if (err) {
+                console.error("Error al insertar en la base de datos:", err);
+              } else {
+                console.log(`Pago insertado correctamente para ${username}: ${key} - Monto: ${amount}`);
+              }
+
+              pendingInserts--;
+              if (pendingInserts === 0) {
+                console.log("Todas las inserciones de pagos han sido completadas.");
+              }
+            });
+          }
+        }
+      });
+    });
+  });
+};
+
+const parseDate = (dateString) => {
+  // Intenta convertir la fecha usando un formato específico
+  const parts = dateString.split('/');
+  if (parts.length === 3) {
+    // Asumiendo formato DD/MM/YYYY
+    return new Date(parts[2], parts[1] - 1, parts[0]);
+  }
+  return null; // Retorna null si no se puede convertir
+};
